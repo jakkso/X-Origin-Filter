@@ -21,6 +21,11 @@ const deselectAllBtn = document.getElementById('deselectAllBtn');
 const countryList = document.getElementById('countryList');
 const themeToggle = document.getElementById('themeToggle');
 
+// Rate limit fallback elements
+const rateLimitFallback = document.getElementById('rateLimitFallback');
+const fallbackResetTime = document.getElementById('fallbackResetTime');
+const restoreFilterBtn = document.getElementById('restoreFilterBtn');
+
 // Rate limit elements
 const rateLimitSectionHeader = document.getElementById('rateLimitSectionHeader');
 const rateLimitExpandIcon = document.getElementById('rateLimitExpandIcon');
@@ -40,6 +45,8 @@ const modeRadios = document.querySelectorAll('input[name="loadingMode"]');
 let selectedCountries = new Set();
 let allCountries = [];
 let currentTheme = 'auto'; // auto, light, or dark
+let isRateLimitFallbackActive = false;
+let fallbackResetTimestamp = null;
 
 // Initialize popup
 async function init() {
@@ -70,11 +77,12 @@ async function init() {
   const remainingCountries = countriesArray.sort();
   allCountries = [...sortedCountries, ...remainingCountries];
 
-  // Load saved state
-  chrome.storage.local.get([TOGGLE_KEY, FILTER_ENABLED_KEY, SELECTED_COUNTRIES_KEY], (result) => {
+  // Load saved state (including rate limit fallback state)
+  chrome.storage.local.get([TOGGLE_KEY, FILTER_ENABLED_KEY, SELECTED_COUNTRIES_KEY, 'rate_limit_active'], (result) => {
     const isEnabled = result[TOGGLE_KEY] !== undefined ? result[TOGGLE_KEY] : DEFAULT_ENABLED;
     const filterEnabled = result[FILTER_ENABLED_KEY] !== undefined ? result[FILTER_ENABLED_KEY] : DEFAULT_FILTER_ENABLED;
     const savedCountries = result[SELECTED_COUNTRIES_KEY] || allCountries;
+    isRateLimitFallbackActive = result['rate_limit_active'] || false;
 
     selectedCountries = new Set(savedCountries);
 
@@ -82,6 +90,22 @@ async function init() {
     updateFilterToggle(filterEnabled);
     populateCountryList();
     updateFilterInfo();
+
+    // Show rate limit fallback indicator if active
+    if (isRateLimitFallbackActive) {
+      // Get reset time from content script
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, { type: 'getRateLimitStatus' }, (response) => {
+            if (response && response.resetTime) {
+              fallbackResetTimestamp = Math.floor(response.resetTime / 1000); // Convert ms to seconds
+              showRateLimitFallback();
+              updateFallbackTimer();
+            }
+          });
+        }
+      });
+    }
   });
 }
 
@@ -185,6 +209,17 @@ deselectAllBtn.addEventListener('click', () => {
   updateCheckboxes();
   updateFilterInfo();
   notifyContentScript();
+});
+
+// Restore filter button (manual restore during rate limit)
+restoreFilterBtn.addEventListener('click', () => {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0]) {
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'manualRestoreFilter' }).catch(() => {
+        // Content script not loaded yet
+      });
+    }
+  });
 });
 
 // Populate country list with checkboxes
@@ -295,19 +330,28 @@ function updateFilterInfo() {
 
     if (filterEnabled) {
       const count = selectedCountries.size;
-      if (count === 0) {
-        filterInfo.textContent = '⚠️ No countries selected - all posts hidden';
+      let infoText = '';
+
+      // Show different message if rate limit fallback is active
+      if (isRateLimitFallbackActive) {
+        infoText = `${count} countries selected (includes Unknown - rate limit)`;
+        filterInfo.style.background = '#fff3cd';
+        filterInfo.style.color = '#856404';
+      } else if (count === 0) {
+        infoText = '⚠️ No countries selected - all posts hidden';
         filterInfo.style.background = '#fff3cd';
         filterInfo.style.color = '#856404';
       } else if (count === allCountries.length) {
-        filterInfo.textContent = `✓ All ${count} countries selected`;
+        infoText = `✓ All ${count} countries selected`;
         filterInfo.style.background = '#d1f2eb';
         filterInfo.style.color = '#0c5540';
       } else {
-        filterInfo.textContent = `${count} of ${allCountries.length} countries selected`;
+        infoText = `${count} of ${allCountries.length} countries selected`;
         filterInfo.style.background = '#d1ecf1';
         filterInfo.style.color = '#0c5460';
       }
+
+      filterInfo.textContent = infoText;
     } else {
       filterInfo.textContent = 'Select countries to show in feed';
       filterInfo.style.background = '#f7f9f9';
@@ -504,6 +548,56 @@ themeToggle.addEventListener('click', () => {
   });
 });
 
+// Listen for messages from content script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'rateLimitFallbackActivated') {
+    // Show rate limit fallback indicator
+    isRateLimitFallbackActive = true;
+    fallbackResetTimestamp = message.resetTime; // Unix timestamp in seconds
+    showRateLimitFallback();
+    updateFallbackTimer();
+  } else if (message.type === 'rateLimitFallbackDeactivated') {
+    // Hide rate limit fallback indicator
+    isRateLimitFallbackActive = false;
+    fallbackResetTimestamp = null;
+    hideRateLimitFallback();
+  } else if (message.type === 'settingsUpdate' && message.isAutomaticUpdate) {
+    // Handle automatic settings update from content script (during fallback)
+    selectedCountries = new Set(message.selectedCountries);
+    updateCheckboxes();
+    updateFilterInfo();
+  }
+});
+
+// Show rate limit fallback indicator
+function showRateLimitFallback() {
+  rateLimitFallback.style.display = 'block';
+  updateFilterInfo(); // Update filter info to show fallback status
+}
+
+// Hide rate limit fallback indicator
+function hideRateLimitFallback() {
+  rateLimitFallback.style.display = 'none';
+  updateFilterInfo(); // Update filter info back to normal
+}
+
+// Update fallback timer display
+function updateFallbackTimer() {
+  if (!isRateLimitFallbackActive || !fallbackResetTimestamp) {
+    return;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const timeLeft = fallbackResetTimestamp - now;
+  const minutesLeft = Math.ceil(timeLeft / 60);
+
+  if (minutesLeft > 0) {
+    fallbackResetTime.textContent = minutesLeft.toString();
+  } else {
+    fallbackResetTime.textContent = '0';
+  }
+}
+
 // Initialize theme first (before other UI elements)
 initTheme();
 
@@ -517,3 +611,6 @@ initLoadingMode();
 updateRateLimitStatus();
 // Update rate limit status every 10 seconds
 setInterval(updateRateLimitStatus, 10000);
+
+// Update fallback timer every 30 seconds
+setInterval(updateFallbackTimer, 30000);

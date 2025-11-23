@@ -30,6 +30,11 @@ class RateLimitTracker {
         console.log('✅ Twitter rate limit has reset');
         this.twitterResetTime = null;
         this.twitterRemaining = null;
+
+        // Deactivate rate limit fallback mode
+        deactivateRateLimitFallback().catch(err => {
+          console.error('Error deactivating rate limit fallback:', err);
+        });
       }
     }
   }
@@ -43,6 +48,11 @@ class RateLimitTracker {
     const resetDate = new Date(resetTime * 1000);
     const minutesUntil = Math.ceil((resetTime * 1000 - Date.now()) / 60000);
     console.log(`🚨 Twitter rate limit: ${limit - remaining}/${limit} used, resets at ${resetDate.toLocaleTimeString()} (in ${minutesUntil} min)`);
+
+    // Activate rate limit fallback mode
+    activateRateLimitFallback().catch(err => {
+      console.error('Error activating rate limit fallback:', err);
+    });
   }
 
   // Check if we can make a new request
@@ -141,6 +151,11 @@ const FILTER_ENABLED_KEY = 'country_filter_enabled';
 const SELECTED_COUNTRIES_KEY = 'selected_countries';
 const DEFAULT_FILTER_ENABLED = false;
 
+// Rate limit fallback state
+const FILTER_BACKUP_KEY = 'filter_backup_before_rate_limit';
+const RATE_LIMIT_ACTIVE_KEY = 'rate_limit_active';
+let isRateLimitFallbackActive = false;
+
 // Loading mode state
 let loadingMode = 'balanced'; // 'aggressive', 'balanced', or 'conservative'
 const LOADING_MODE_KEY = 'loading_mode';
@@ -166,12 +181,157 @@ async function loadEnabledState() {
     console.log('Country filter enabled:', countryFilterEnabled);
     console.log('Selected countries:', selectedCountries.size);
     console.log('Loading mode:', loadingMode);
+
+    // Check if rate limit fallback is active
+    const rateLimitResult = await chrome.storage.local.get([RATE_LIMIT_ACTIVE_KEY]);
+    isRateLimitFallbackActive = rateLimitResult[RATE_LIMIT_ACTIVE_KEY] || false;
+    if (isRateLimitFallbackActive) {
+      console.log('⚠️ Rate limit fallback is active - Unknown posts are being shown');
+    }
   } catch (error) {
     console.error('Error loading enabled state:', error);
     extensionEnabled = DEFAULT_ENABLED;
     countryFilterEnabled = DEFAULT_FILTER_ENABLED;
     loadingMode = DEFAULT_LOADING_MODE;
     selectedCountries = new Set(Object.keys(COUNTRY_FLAGS));
+    isRateLimitFallbackActive = false;
+  }
+}
+
+// Activate rate limit fallback mode
+async function activateRateLimitFallback() {
+  if (isRateLimitFallbackActive) {
+    console.log('⚠️ Rate limit fallback already active');
+    return; // Already active
+  }
+
+  if (!countryFilterEnabled) {
+    console.log('ℹ️  Country filter not enabled, skipping rate limit fallback');
+    return; // Only activate if filter is enabled
+  }
+
+  // Check if Unknown is already selected
+  if (selectedCountries.has('Unknown')) {
+    console.log('ℹ️  Unknown already selected, no fallback needed');
+    return;
+  }
+
+  try {
+    console.log('🔄 Activating rate limit fallback mode...');
+
+    // Save current filter settings
+    const backup = {
+      filterEnabled: countryFilterEnabled,
+      selectedCountries: Array.from(selectedCountries),
+      timestamp: Date.now()
+    };
+
+    await chrome.storage.local.set({
+      [FILTER_BACKUP_KEY]: backup,
+      [RATE_LIMIT_ACTIVE_KEY]: true
+    });
+
+    // Add "Unknown" to selected countries
+    selectedCountries.add('Unknown');
+    await chrome.storage.local.set({
+      [SELECTED_COUNTRIES_KEY]: Array.from(selectedCountries)
+    });
+
+    isRateLimitFallbackActive = true;
+
+    console.log('✅ Rate limit fallback activated - Unknown posts will now be shown');
+
+    // Show toast notification
+    showToast('⚠️ Rate limited - showing Unknown posts until API resets');
+
+    // Notify popup to update UI (mark as automatic update)
+    chrome.runtime.sendMessage({
+      type: 'rateLimitFallbackActivated',
+      resetTime: rateLimitTracker.twitterResetTime
+    }).catch(() => {
+      // Popup might not be open, that's okay
+    });
+
+    // Also send settingsUpdate to update checkboxes in popup
+    chrome.runtime.sendMessage({
+      type: 'settingsUpdate',
+      extensionEnabled: extensionEnabled,
+      filterEnabled: countryFilterEnabled,
+      selectedCountries: Array.from(selectedCountries),
+      isAutomaticUpdate: true
+    }).catch(() => {
+      // Popup might not be open, that's okay
+    });
+
+    // Apply filter to show Unknown posts
+    applyFilterToAllPosts();
+
+  } catch (error) {
+    console.error('❌ Error activating rate limit fallback:', error);
+  }
+}
+
+// Deactivate rate limit fallback mode and restore original settings
+async function deactivateRateLimitFallback() {
+  if (!isRateLimitFallbackActive) {
+    return; // Not active
+  }
+
+  try {
+    console.log('🔄 Deactivating rate limit fallback mode...');
+
+    // Load backup settings
+    const result = await chrome.storage.local.get([FILTER_BACKUP_KEY]);
+    const backup = result[FILTER_BACKUP_KEY];
+
+    if (backup) {
+      // Restore original settings
+      countryFilterEnabled = backup.filterEnabled;
+      selectedCountries = new Set(backup.selectedCountries);
+
+      await chrome.storage.local.set({
+        [FILTER_ENABLED_KEY]: countryFilterEnabled,
+        [SELECTED_COUNTRIES_KEY]: Array.from(selectedCountries)
+      });
+
+      console.log('✅ Original filter settings restored:', {
+        filterEnabled: countryFilterEnabled,
+        selectedCountries: selectedCountries.size
+      });
+    }
+
+    // Clear fallback state
+    await chrome.storage.local.remove([FILTER_BACKUP_KEY, RATE_LIMIT_ACTIVE_KEY]);
+    isRateLimitFallbackActive = false;
+
+    console.log('✅ Rate limit fallback deactivated - normal filtering resumed');
+
+    // Show toast notification
+    showToast('✅ Rate limit reset - normal filtering resumed');
+
+    // Notify popup to update UI
+    chrome.runtime.sendMessage({
+      type: 'rateLimitFallbackDeactivated'
+    }).catch(() => {
+      // Popup might not be open, that's okay
+    });
+
+    // Also send settingsUpdate to update checkboxes in popup
+    chrome.runtime.sendMessage({
+      type: 'settingsUpdate',
+      extensionEnabled: extensionEnabled,
+      filterEnabled: countryFilterEnabled,
+      selectedCountries: Array.from(selectedCountries),
+      isAutomaticUpdate: true
+    }).catch(() => {
+      // Popup might not be open, that's okay
+    });
+
+    // Apply filter with restored settings
+    applyFilterToAllPosts();
+
+  } catch (error) {
+    console.error('❌ Error deactivating rate limit fallback:', error);
   }
 }
 
@@ -207,6 +367,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const oldFilterEnabled = countryFilterEnabled;
     const oldSelectedCountriesArray = Array.from(selectedCountries).sort();
 
+    // If user manually changes settings while rate limit fallback is active, cancel the fallback
+    if (isRateLimitFallbackActive && !request.isAutomaticUpdate) {
+      console.log('ℹ️  User manually changed settings - canceling rate limit fallback');
+      // Clear fallback state but don't restore (user's manual changes take precedence)
+      chrome.storage.local.remove([FILTER_BACKUP_KEY, RATE_LIMIT_ACTIVE_KEY]);
+      isRateLimitFallbackActive = false;
+    }
+
     extensionEnabled = request.extensionEnabled;
     countryFilterEnabled = request.filterEnabled;
     selectedCountries = new Set(request.selectedCountries);
@@ -231,6 +399,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // Just apply filtering to current posts
       applyFilterToAllPosts();
     }
+  } else if (request.type === 'manualRestoreFilter') {
+    // Handle manual restore request from popup
+    deactivateRateLimitFallback().catch(err => {
+      console.error('Error manually restoring filter:', err);
+    });
+    sendResponse({ success: true });
+    return true;
   }
 });
 

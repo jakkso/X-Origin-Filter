@@ -224,6 +224,48 @@
       border-radius: 6px;
       text-align: center;
     }
+    .rate-limit-fallback {
+      margin-top: 12px;
+      margin-bottom: 12px;
+      padding: 12px;
+      background: #fff3cd;
+      border: 1px solid #f4b400;
+      border-radius: 6px;
+    }
+    [data-theme="dark"] .rate-limit-fallback {
+      background: #3a2f1e;
+      border-color: #f4b400;
+    }
+    .fallback-message {
+      font-size: 13px;
+      font-weight: 500;
+      color: #856404;
+      margin-bottom: 6px;
+      text-align: center;
+    }
+    [data-theme="dark"] .fallback-message {
+      color: #f4b400;
+    }
+    .fallback-details {
+      font-size: 11px;
+      color: #856404;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    [data-theme="dark"] .fallback-details {
+      color: #d4a20a;
+    }
+    .btn-restore {
+      width: 100%;
+      background: #f4b400;
+      border-color: #f4b400;
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .btn-restore:hover {
+      background: #d4a20a;
+      border-color: #d4a20a;
+    }
     .info {
       font-size: 12px;
       color: var(--text-secondary);
@@ -416,6 +458,15 @@
 
       <div class="filter-info" id="filterInfo">
         Select countries to show in feed
+      </div>
+
+      <!-- Rate Limit Fallback Indicator -->
+      <div class="rate-limit-fallback" id="rateLimitFallback" style="display: none;">
+        <div class="fallback-message">⚠️ Rate limited - showing Unknown posts</div>
+        <div class="fallback-details" id="fallbackDetails">
+          Resets in <span id="fallbackResetTime">--</span> minutes
+        </div>
+        <button class="btn btn-restore" id="restoreFilterBtn">Restore Filter Now</button>
       </div>
 
       <div class="filter-actions">
