@@ -1080,6 +1080,7 @@ async function addFlagToUsername(usernameElement, screenName) {
   flagSpan.style.display = 'inline';
   flagSpan.style.color = 'inherit';
   flagSpan.style.verticalAlign = 'middle';
+  flagSpan.dataset.location = location;
   flagSpan.addEventListener("mouseenter", flagTooltipEnterHandler);
   flagSpan.addEventListener('mouseleave', flagTooltipExitHandler);
   
