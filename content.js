@@ -1080,6 +1080,8 @@ async function addFlagToUsername(usernameElement, screenName) {
   flagSpan.style.display = 'inline';
   flagSpan.style.color = 'inherit';
   flagSpan.style.verticalAlign = 'middle';
+  flagSpan.addEventListener("mouseenter", flagTooltipEnterHandler);
+  flagSpan.addEventListener('mouseleave', flagTooltipExitHandler);
   
   // Use userNameContainer found above, or find it if not found
   const containerForFlag = userNameContainer || usernameElement.querySelector('[data-testid="UserName"], [data-testid="User-Name"]');
@@ -1346,6 +1348,53 @@ function injectDissolveStyles() {
     }
   `;
   document.head.appendChild(style);
+}
+function createFlagToolTip() {
+  // Create a single tooltip element (reused for performance)
+  if (document.getElementById('flag-tooltip')) return;
+  const tooltip = document.createElement('div');
+  tooltip.id = 'flag-tooltip';
+  const style = document.createElement('style');
+  style.textContent = `
+    #flag-tooltip {
+      position: absolute;
+      background-color: #333;
+      color: white;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: sans-serif;
+      pointer-events: none; /* Allows mouse to pass through so hover ends properly */
+      z-index: 1000;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    #flag-tooltip.show {
+      opacity: 1;
+    }
+    `
+  document.head.appendChild(style);
+  document.body.appendChild(tooltip);
+}
+
+
+// Show country name when hovering flag element
+function flagTooltipEnterHandler(e) {
+  const span = e.target;
+  const padding = 10;
+  const tooltip = document.getElementById('flag-tooltip');
+  tooltip.textContent = span.dataset.location || 'Unknown';
+  tooltip.style.left = (e.pageX + padding) + 'px';
+  tooltip.style.top = (e.pageY + padding) + 'px';
+  tooltip.classList.add('show');
+}
+
+// Hide Country name when exiting mouseover
+function flagTooltipExitHandler() {
+  const tooltip = document.getElementById('flag-tooltip');
+  tooltip.classList.remove('show');
 }
 
 // Function to apply country filter to a single post/element
@@ -1762,7 +1811,9 @@ async function init() {
     console.log('Extension is disabled');
     return;
   }
-
+  
+  createFlagToolTip();
+  
   // Inject page script
   injectPageScript();
 
